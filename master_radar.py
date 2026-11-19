@@ -1,12 +1,13 @@
 import pandas as pd, datetime, feedparser, requests, os, re, logging
 from nsepython import equity_history
 from concurrent.futures import ThreadPoolExecutor
+import yfinance as yf
 from bs4 import BeautifulSoup
 
 # Suppress Yahoo Warnings completely
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
-print("🔄 Fetching NSE Data + Screener Deep Data + 20+ News Sources... (Wait 45 sec)\n")
+print("🔄 Fetching NSE Data + Screener + 20+ News + Macro Impact... (Wait 45 sec)\n")
 
 # === 1. STOCK UNIVERSE ===
 stocks = {
@@ -42,93 +43,89 @@ def get_screener_data(symbol):
     except:
         return {"Promoter": "N/A", "Debt_Eq": "N/A"}
 
-# === 3. DIRECT NSE SCRAPING (100% RELIABLE - NO nsepython) ===
+# === 3. NSE PRICE & TREND ===
 def get_nse_data(symbol):
     try:
-        # Direct NSE API call
-        url = f"https://www.nseindia.com/api/historical/cm/equity?series=[%22EQ%22]&symbol={symbol}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Referer": "https://www.nseindia.com/get-quotes/equity?symbol=" + symbol
-        }
-        
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers)
-        response = session.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            return None
-            
-        data = response.json()
-        if not data.get('data'):
-            return None
-        
-        # Extract last 60 days of data
-        prices = []
-        for item in data['data'][-60:]:
-            prices.append({
-                'Close': float(item['CH_CLOSE']),
-                'Open': float(item['CH_OPEN']),
-                'High': float(item['CH_HIGH']),
-                'Low': float(item['CH_LOW'])
-            })
-        
-        if len(prices) < 20:
-            return None
-        
-        df = pd.DataFrame(prices)
+        df = equity_history(symbol, period="6m")
+        if df.empty or len(df) < 50: return None
         current_price = round(df['Close'].iloc[-1], 2)
         sma_20 = round(df['Close'].rolling(window=20).mean().iloc[-1], 2)
-        
         signal = "HOLD"
         if current_price > sma_20: signal = "BUY/ADD"
         elif current_price < sma_20: signal = "SELL/AVOID"
-        
         curr, prev = df.iloc[-1], df.iloc[-2]
         body, range_hl = abs(curr['Close'] - curr['Open']), curr['High'] - curr['Low']
         pattern = "➡️ NEUTRAL"
         if range_hl > 0 and (body / range_hl) < 0.15: pattern = "⚪ DOJI"
         elif (min(curr['Open'], curr['Close']) - curr['Low']) > (2 * body): pattern = "🔨 HAMMER"
-        
         screener = get_screener_data(symbol)
-        
         return {
             "Name": symbol, "Price": current_price, "SMA20": sma_20, "Signal": signal, "Pattern": pattern,
             "Promoter": screener["Promoter"], "Debt_Eq": screener["Debt_Eq"]
         }
-    except Exception as e:
+    except:
         return None
 
 market_data = [data for name, symbol in stocks.items() if (data := get_nse_data(symbol))]
 df_stocks = pd.DataFrame(market_data)
 
-# === 4. MACRO RADAR (Minimal Yahoo, Only for Global Context) ===
-# Note: NSE doesn't provide free API for Gold/Crude. We use Yahoo only for these 2 global indicators.
-macro_assets = {"GOLD": "GC=F", "CRUDE_OIL": "CL=F", "USD_INR": "USDINR=X"}
+# === 4. MACRO + AGRI COMMODITIES + STOCK MAPPER ===
+macro_assets = {
+    "GOLD": "GC=F", "CRUDE_OIL": "CL=F", "USD_INR": "USDINR=X", "COPPER": "HG=F",
+    "WHEAT": "ZW=F", "RICE": "RICE=F", "SUGAR": "SB=F", "CORN": "ZC=F",
+    "VEG_OIL": "ZL=F"   # Palm/Soybean Oil Proxy
+}
+
+# Commodity badhne par kaunse Indian stocks chahiye
+COMMODITY_STOCK_MAP = {
+    "RICE":    [("KRBL","KRBL"),("LT FOODS","LTFOODS"),("ITC","ITC"),("TATA CONSUMER","TATACONSUM")],
+    "WHEAT":   [("ITC","ITC"),("TATA CONSUMER","TATACONSUM"),("DABUR","DABUR")],
+    "SUGAR":   [("BALRAMCHIN","BALRAMCHIN"),("DALMIASUG","DALMIASUG"),("RENUKA","RENUKA"),("TRIVENI","TRIVENI")],
+    "VEG_OIL": [("PATANJALI","PATANJALI"),("ADANI WILMAR","ADANIWILMAR"),("GODREJ AGRO","GODREJAGRO")],
+    "CORN":    [("UPL","UPL"),("COROMANDEL","COROMANDEL"),("CHAMBLFERT","CHAMBLFERT")]
+}
+
 macro_data = []
 impact_lines = []
+usd_trend = "STABLE"
 
 for name, ticker in macro_assets.items():
     try:
-        # Using yfinance only for global macros as NSE doesn't offer this freely via API
-        import yfinance as yf
         hist = yf.download(ticker, period="1mo", progress=False)["Close"]
         close = hist.iloc[:, 0] if isinstance(hist, pd.DataFrame) else hist
         mom_5d = ((close.iloc[-1]/close.iloc[-5])-1)*100
         trend = "📈 UP" if mom_5d > 0 else "📉 DOWN"
         macro_data.append({"Asset": name, "5D %": round(mom_5d, 1), "Trend": trend})
-        
+
+        # Track USD Trend for Pharma
+        if name == "USD_INR" and mom_5d > 0.5:
+            usd_trend = "UP"
+
+        # Crude impact
         if name == "CRUDE_OIL":
-            if mom_5d < -3: impact_lines.append("🛢️ *TEL GIR RAHA HAI:* Paints, Tyres, Airlines ke liye ACHA.")
-            elif mom_5d > 3: impact_lines.append("🛢️ *TEL BADH RAHA HAI:* ONGC ke liye ACHA, Paints ke liye BURA.")
-        if name == "USD_INR":
-            if mom_5d < -0.5: impact_lines.append("💵 *RUPEE MAZBOOT:* FII buying badh sakti hai (Banks/IT positive).")
+            if mom_5d < -3: impact_lines.append("🛢️ *TEL GIR RAHA HAI:* Asian Paints, MRF, IndiGo ke liye ACHA. ONGC ke liye BURA.")
+            elif mom_5d > 3: impact_lines.append("🛢️ *TEL BADH RAHA HAI:* ONGC ke liye ACHA. Paints/Tyres ke liye BURA.")
+        if name == "USD_INR" and mom_5d < -0.5:
+            impact_lines.append("💵 *RUPEE MAZBOOT:* FII buying badhegi (HDFC/ICICI/TCS positive).")
+
+        # AGRI commodity badha → mapped stocks ka LIVE NSE price fetch karo
+        if name in COMMODITY_STOCK_MAP and mom_5d > 1.5:
+            recs = []
+            for disp, sym in COMMODITY_STOCK_MAP[name]:
+                d = get_nse_data(sym)
+                if d: recs.append(f"{disp} @ ₹{d['Price']}")
+            if recs:
+                label = "PALM/VEG OIL" if name=="VEG_OIL" else name
+                impact_lines.append(
+                    f"🌾 *{label} BADH RAHA HAI ({round(mom_5d,1)}%)* → YE STOCKS LE:\n   " +
+                    " | ".join(recs) +
+                    f"\n   ⚠️ FMCG (Nestle/Britannia/HUL) se BACH."
+                )
     except: pass
 
 df_macro = pd.DataFrame(macro_data)
 
-# === 5. NEWS RADAR (YOUR EXACT 20 FEEDS) ===
+# === 5. NEWS RADAR (20 FEEDS + PHARMA DETECTION) ===
 feeds = [
     "https://pib.gov.in/rssfeed.aspx", "https://www.rbi.org.in/scripts/notifications/rss.xml",
     "https://www.sebi.gov.in/content/sebi_news/rss_sebi.xml", "https://www.finmin.nic.in/rss.xml",
@@ -146,7 +143,7 @@ feeds = [
     "https://news.google.com/rss/search?q=FII+DII+Data+OR+Foreign+Investment+India+when:1d&hl=en-IN&gl=IN&ceid=IN:en"
 ]
 
-news_alerts, policy_alerts, institutional_alerts = [], [], []
+news_alerts, policy_alerts, institutional_alerts, pharma_alerts = [], [], [], []
 def fetch_feed(url):
     try: return feedparser.parse(url).entries[:2]
     except: return []
@@ -161,14 +158,17 @@ for entries in results:
             institutional_alerts.append(f"🔵 {entry.title}")
         elif "rbi" in title or "sebi" in title or "budget" in title:
             policy_alerts.append(f"🏛️ {entry.title}")
+        elif any(kw in title for kw in ["usfda", "fda", "nppa", "drug price", "pharma", "medicine", "api"]):
+            pharma_alerts.append(f"💊 {entry.title}")
         else:
             news_alerts.append(f"📰 {entry.title}")
 
 news_alerts = list(dict.fromkeys(news_alerts))[:8]
 policy_alerts = list(dict.fromkeys(policy_alerts))[:4]
 institutional_alerts = list(dict.fromkeys(institutional_alerts))[:4]
+pharma_alerts = list(dict.fromkeys(pharma_alerts))[:4]
 
-# === 6. FORMAT TELEGRAM MESSAGE (HTML FORMAT - 100% WORKING LINKS) ===
+# === 6. FORMAT TELEGRAM MESSAGE (HTML FORMAT) ===
 msg = f"<b>🔥 IQBAL PRO MASTER RADAR</b> ({datetime.datetime.now().strftime('%d-%b %I:%M %p')})\n\n"
 
 if not df_stocks.empty:
@@ -200,6 +200,24 @@ if impact_lines:
     for line in impact_lines:
         msg += f"{line}\n\n"
 
+# === PHARMA & MEDICINE RADAR ===
+if pharma_alerts:
+    msg += "<b>💊 PHARMA & MEDICINE RADAR:</b>\n"
+    for alert in pharma_alerts:
+        msg += f"{alert}\n"
+    
+    if usd_trend == "UP":
+        msg += "\n💡 <i>Dost ki Salah (Rupee Kamzor Hai):</i> Dollar mehenga hai, toh Export wali companies ka profit badhega. In par nazar rakho:\n"
+        msg += "• <b>Sun Pharma</b> (Largest Exporter)\n"
+        msg += "• <b>Dr. Reddy's</b> (US Generics Leader)\n"
+        msg += "• <b>Laurus Labs</b> (API & Exports)\n"
+    else:
+        msg += "\n💡 <i>Dost ki Salah (Rupee Stable Hai):</i> Domestic demand par focus karo. NPPA price hike ki news aaye toh ye lo:\n"
+        msg += "• <b>Cipla</b> (Respiratory Leader)\n"
+        msg += "• <b>Mankind Pharma</b> (Domestic Volume)\n"
+        msg += "• <b>Torrent Pharma</b> (Cardiac/GI)\n"
+    msg += "\n"
+
 if policy_alerts: 
     msg += "<b>🏛️ POLICY & RBI/SEBI:</b>\n" + "\n".join(policy_alerts) + "\n\n"
 if news_alerts: 
@@ -207,7 +225,7 @@ if news_alerts:
 if institutional_alerts: 
     msg += "<b>🔵 FII/DII FLOWS:</b>\n" + "\n".join(institutional_alerts) + "\n\n"
 
-msg += "<b>💡 Pro Tip:</b> 🔗 links par click karke Trendlyne DVM Score aur StockEdge Delivery Data check karo. Ye 'Hidden Data' hai."
+msg += "<b>💡 Pro Tip:</b> 🔗 links par click karke Trendlyne DVM Score aur StockEdge Delivery Data check karo."
 
 # === 7. SEND TO TELEGRAM (HTML MODE) ===
 TG_TOKEN = "9090083594:AAEx5b0stvrE_74K8eQvIi2nOcBdZnStri8"
