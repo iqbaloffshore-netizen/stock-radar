@@ -11,16 +11,26 @@ TG_CHAT = "5231255872"
 # === 1. TELEGRAM CHUNKING FIX ===
 def send_telegram(msg):
     try:
+        # Message ko 3800 characters ke chunks mein baant do
         chunks = [msg[i:i+3800] for i in range(0, len(msg), 3800)]
+        
         for i, chunk in enumerate(chunks):
-            text = chunk if len(chunks) == 1 else f"<b>Part {i+1}/{len(chunks)}</b>\n\n{chunk}"
-            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
-                          data={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML"}, timeout=15)
-            time.sleep(1)
-        print("✅ Message sent to Telegram")
+            text = chunk if len(chunks) == 1 else f"Part {i+1}/{len(chunks)}\n\n{chunk}"
+            
+            # FIX: parse_mode="HTML" hata diya hai taaki M&M, L&T crash na kare
+            response = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
+                                     data={"chat_id": TG_CHAT, "text": text}, timeout=15)
+            
+            # Ab hum Telegram ka asli response check karenge
+            if response.status_code == 200:
+                print("✅ Message sent to Telegram")
+            else:
+                print(f"❌ Telegram Error: {response.text}")
+                
+            time.sleep(1) # Rate limit se bachne ke liye
+            
     except Exception as e:
         print(f"❌ Telegram failed: {e}")
-
 def get_sentiment(title):
     pos = ["buy", "upgrade", "growth", "profit", "approval", "hike", "positive", "bullish", "surge", "gain", "won", "secured"]
     neg = ["sell", "downgrade", "loss", "ban", "warning", "crash", "negative", "bearish", "fraud", "scam", "fall", "probe"]
