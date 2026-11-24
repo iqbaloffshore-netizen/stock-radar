@@ -1,6 +1,7 @@
 import pandas as pd, datetime, feedparser, requests, os, re, logging, time
 import yfinance as yf
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor # <--- YE IMPORT MISSING THA, AB ADD HO GAYA HAI
 
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
@@ -62,7 +63,8 @@ def get_screener_data(symbol):
 # === 3. YAHOO FINANCE DATA FETCHER (100% NSE Block Bypass) ===
 def get_stock_data(symbol):
     try:
-        time.sleep(0.3) # Throttle to be safe
+        time.sleep(0.3)
+        # YAHOO FINANCE BYPASS (No NSE Blocking)
         df = yf.download(f"{symbol}.NS", period="6mo", progress=False)
         if df.empty or len(df) < 50: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
