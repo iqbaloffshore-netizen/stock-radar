@@ -8,20 +8,21 @@ logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 TG_TOKEN = "9090083594:AAEx5b0stvrE_74K8eQvIi2nOcBdZnStri8"
 TG_CHAT = "5231255872"
 
-# === 1. TELEGRAM CHUNKING FIX ===
+# === 1. TELEGRAM CHUNKING (Part 1/4, Part 2/4 style) ===
 def send_telegram(msg):
     try:
         chunks = [msg[i:i+3800] for i in range(0, len(msg), 3800)]
         for i, chunk in enumerate(chunks):
             text = chunk if len(chunks) == 1 else f"<b>Part {i+1}/{len(chunks)}</b>\n\n{chunk}"
-            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
-                          data={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML"}, timeout=15)
+            r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                              data={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML"}, timeout=15)
+            print(f"Chunk {i+1} Status: {r.status_code}")
             time.sleep(1)
         print("✅ Message sent to Telegram")
     except Exception as e:
         print(f"❌ Telegram failed: {e}")
 
-# === 2. SCREENER SCRAPER (Fraud Check Proxy) ===
+# === 2. SCREENER DATA (Promoter + Debt) ===
 def get_screener_data(symbol):
     try:
         url = f"https://www.screener.in/company/{symbol}/"
@@ -82,34 +83,29 @@ def get_stock_data(symbol):
             if pat == "🔨 HAMMER": wr = "72% (Strong Reversal)"
             elif pat == "⚪ DOJI": wr = "65% (Consolidation Break)"
             else: wr = "58% (Trend Follow)"
-            
+        
         # Position Sizing for ₹2000 Target
-        target_profit = 2000
         profit_per_share = tgt - cp
         risk_per_share = cp - sl
-        shares_for_target = int(target_profit / profit_per_share) if profit_per_share > 0 else 0
-        max_loss_if_sl_hit = int(shares_for_target * risk_per_share) if shares_for_target > 0 else 0
+        shares_for_target = int(2000 / profit_per_share) if profit_per_share > 0 else 0
+        max_loss = int(shares_for_target * risk_per_share) if shares_for_target > 0 else 0
         
         scr = get_screener_data(symbol)
-        is_fraud_risk = False
-        try:
-            if float(scr['Debt_Eq']) > 1.5: is_fraud_risk = True
-        except: pass
         
         return {
             "Name": symbol, "Price": cp, "SMA20": sma20, "Signal": sig, "Pattern": pat,
             "SL": sl, "Target": tgt, "Stealth": stealth, "Promoter": scr["Promoter"],
             "Debt_Eq": scr["Debt_Eq"], "WinRate": wr, "SharesForTarget": shares_for_target,
-            "MaxLoss": max_loss_if_sl_hit, "FraudRisk": is_fraud_risk
+            "MaxLoss": max_loss
         }
     except Exception:
         return None
 
 # === 4. MAIN EXECUTION ===
 try:
-    print("🔄 Starting Ultimate Desi DTrader (Full Integrated Version)...")
+    print("🔄 Starting Ultimate Desi DTrader (Full Detail Mode)...")
     is_weekend = datetime.datetime.now().weekday() >= 5
-    
+
     base_stocks = {
         "TATA_STEEL": "TATASTEEL", "JSW_STEEL": "JSWSTEEL", "ACC": "ACC",
         "HDFC_BANK": "HDFCBANK", "ICICI_BANK": "ICICIBANK", "SBIN": "SBIN",
@@ -129,11 +125,11 @@ try:
         "RAJESH_EXPORT": "RAJESHEXPO", "PATANJALI": "PATANJALI", "GODREJ_AGRO": "GODREJAGRO",
         "BALRAMCHIN": "BALRAMCHIN", "KALYAN_JEW": "KALYANKJIL"
     }
-    
+
     market_data = [d for s in base_stocks.values() if (d := get_stock_data(s))]
     df_stocks = pd.DataFrame(market_data)
 
-    # === 5. COMMODITY OCEAN (UP/DOWN Logic) ===
+    # === 5. COMMODITY OCEAN ===
     macro_assets = {"GOLD": "GC=F", "SILVER": "SI=F", "CRUDE_OIL": "CL=F", "USD_INR": "USDINR=X",
                     "COPPER": "HG=F", "STEEL": "STEEL=F", "WHEAT": "ZW=F", "RICE": "RICE=F",
                     "SUGAR": "SB=F", "CORN": "ZC=F", "VEG_OIL": "ZL=F"}
@@ -178,18 +174,14 @@ try:
                     impact_lines.append(f"🌊 *{label} ({round(mom,1)}%)* → {' | '.join(recs)}")
         except: pass
 
-    # === 6. NEWS & SCHEME RADAR (FEEDS ARE HERE!) ===
+    # === 6. NEWS & SCHEME RADAR ===
     feeds = [
-        "https://pib.gov.in/rssfeed.aspx",
-        "https://www.rbi.org.in/scripts/notifications/rss.xml",
-        "https://www.sebi.gov.in/content/sebi_news/rss_sebi.xml",
-        "https://www.finmin.nic.in/rss.xml",
+        "https://pib.gov.in/rssfeed.aspx", "https://www.rbi.org.in/scripts/notifications/rss.xml",
+        "https://www.sebi.gov.in/content/sebi_news/rss_sebi.xml", "https://www.finmin.nic.in/rss.xml",
         "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
         "https://economictimes.indiatimes.com/industry/rssfeeds/1335018.cms",
-        "https://www.livemint.com/rss/politics",
-        "https://www.business-standard.com/rss/policy-10233.rss",
-        "https://www.moneycontrol.com/rss/marketreports.xml",
-        "https://www.economist.com/india/rss.xml",
+        "https://www.livemint.com/rss/politics", "https://www.business-standard.com/rss/policy-10233.rss",
+        "https://www.moneycontrol.com/rss/marketreports.xml", "https://www.economist.com/india/rss.xml",
         "https://news.google.com/rss/search?q=India+Budget+OR+PLI+Scheme+OR+Capex+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
         "https://news.google.com/rss/search?q=RBI+Repo+Rate+OR+Inflation+Data+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
         "https://news.google.com/rss/search?q=Defence+Tender+OR+HAL+Order+OR+BEL+Contract+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
@@ -231,14 +223,12 @@ try:
             if any(k in t for k in CONTRACT_KEYWORDS):
                 for nm, sym in base_stocks.items():
                     if nm.lower() in t or sym.lower() in t:
-                        d = get_stock_data(sym)
-                        val = "⚠️ HIGH DEBT RISK" if d and d['FraudRisk'] else "✅ VALIDATED"
-                        contract_alerts.append(f"🏗️ *{nm}* → {e.title[:60]}... {val}")
+                        contract_alerts.append(f"🏗️ *{nm}* → {e.title[:60]}...")
                         break
 
     news_alerts, policy_alerts, institutional_alerts, pharma_alerts, scheme_alerts, contract_alerts = [list(dict.fromkeys(x))[:4] for x in [news_alerts, policy_alerts, institutional_alerts, pharma_alerts, scheme_alerts, contract_alerts]]
 
-    # === 7. FORMAT MESSAGE ===
+    # === 7. FORMAT MESSAGE (Full Detail with All Sections) ===
     header = "📅 WEEKEND BRIEFING" if is_weekend else "🔥 ULTIMATE DESI DTRADER"
     msg = f"<b>{header}</b> ({datetime.datetime.now().strftime('%d-%b %I:%M %p')})\n\n"
     
@@ -249,29 +239,42 @@ try:
                 msg += f"<b>{lbl}:</b>\n"
                 for _, r in sub.iterrows():
                     qty_text = f"📦 For ₹2k Profit: Buy <b>{r['SharesForTarget']}</b> Shares (Max Loss: ₹{r['MaxLoss']})" if r['SharesForTarget'] > 0 else ""
-                    fraud_text = " ⚠️ HIGH DEBT" if r['FraudRisk'] else ""
                     
-                    msg += f"• <b>{r['Name']}</b>{fraud_text} @ ₹{r['Price']} | {r['Pattern']} | {r['Stealth']}\n"
+                    msg += f"• <b>{r['Name']}</b> @ ₹{r['Price']} | {r['Pattern']} | {r['Stealth']}\n"
                     msg += f"  🎯 T: ₹{r['Target']} | 🛑 SL: ₹{r['SL']} | 📊 WR: {r['WinRate']}\n"
                     if qty_text: msg += f"  {qty_text}\n"
                     msg += f"  🔗 <a href='https://www.screener.in/company/{r['Name']}/'>Screener</a>\n\n"
     else:
         msg += "<b>⚠️ Data Fetch Issue:</b> Temporary glitch. Macro/Scheme data niche dekhein.\n\n"
 
-    if macro_data: 
+    if macro_data:
         msg += "<b>🌍 MACRO & COMMODITY:</b>\n" + "\n".join([f"• {r['Asset']}: {r['5D%']}% {r['Trend']}" for r in macro_data]) + "\n\n"
-    if impact_lines: msg += "<b>🌊 COMMODITY IMPACT:</b>\n" + "\n\n".join(impact_lines) + "\n\n"
-    if contract_alerts: msg += "<b>🏗️ CONTRACTS/EXPANSION:</b>\n" + "\n".join(contract_alerts) + "\n\n"
-    if scheme_alerts: msg += "<b>🇮🇳 GOVT SCHEMES:</b>\n" + "\n".join(scheme_alerts) + "\n\n"
-    if pharma_alerts: msg += "<b>💊 PHARMA:</b>\n" + "\n".join(pharma_alerts) + "\n\n"
-    if policy_alerts: msg += "<b>🏛️ POLICY:</b>\n" + "\n".join(policy_alerts) + "\n\n"
-    if news_alerts: msg += "<b>📰 NEWS:</b>\n" + "\n".join(news_alerts) + "\n\n"
-    if institutional_alerts: msg += "<b>🔵 FII/DII:</b>\n" + "\n".join(institutional_alerts) + "\n\n"
+    
+    if impact_lines:
+        msg += "<b>🌊 COMMODITY IMPACT:</b>\n" + "\n".join(impact_lines) + "\n\n"
+    
+    if contract_alerts:
+        msg += "<b>🏗️ CONTRACTS/EXPANSION:</b>\n" + "\n".join(contract_alerts) + "\n\n"
+    
+    if scheme_alerts:
+        msg += "<b>🇮🇳 GOVT SCHEMES:</b>\n" + "\n".join(scheme_alerts) + "\n\n"
+    
+    if pharma_alerts:
+        msg += "<b>💊 PHARMA:</b>\n" + "\n".join(pharma_alerts) + "\n\n"
+    
+    if policy_alerts:
+        msg += "<b>🏛️ POLICY:</b>\n" + "\n".join(policy_alerts) + "\n\n"
+    
+    if news_alerts:
+        msg += "<b>📰 NEWS:</b>\n" + "\n".join(news_alerts) + "\n\n"
+    
+    if institutional_alerts:
+        msg += "<b>🔵 FII/DII:</b>\n" + "\n".join(institutional_alerts) + "\n\n"
     
     msg += "<b>💡 RULE:</b> Sirf CNC Delivery. Max ₹10k/trade. SL-M Mandatory. No Hope Trading."
     
     send_telegram(msg)
-    print("✅ Jail-Cancel Blueprint Executed Successfully!")
+    print("✅ Ultimate Desi DTrader completed successfully!")
 
 except Exception as e:
     error_msg = f"🚨 <b>SYSTEM CRASHED!</b>\n\nError: <code>{str(e)}</code>\n\nTraceback:\n<code>{str(e)}</code>"
