@@ -1,4 +1,4 @@
-import pandas as pd, datetime, feedparser, requests, os, re, logging, time
+import pandas as pd, datetime, feedparser, requests, os, re, logging, time, random
 import yfinance as yf
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
@@ -8,20 +8,22 @@ logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 TG_TOKEN = "9090083594:AAEx5b0stvrE_74K8eQvIi2nOcBdZnStri8"
 TG_CHAT = "5231255872"
 
+# === 1. TELEGRAM CHUNKING FIX ===
 def send_telegram(msg):
     try:
         chunks = [msg[i:i+3800] for i in range(0, len(msg), 3800)]
         for i, chunk in enumerate(chunks):
             text = chunk if len(chunks) == 1 else f"<b>Part {i+1}/{len(chunks)}</b>\n\n{chunk}"
-            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
-                          data={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML"}, timeout=15)
+            # No HTML parse mode to prevent silent drops on special chars
+            r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
+                              data={"chat_id": TG_CHAT, "text": text}, timeout=15)
+            print(f"Chunk {i+1} Status: {r.status_code}")
             time.sleep(1)
         print("✅ Message sent to Telegram")
     except Exception as e:
         print(f"❌ Telegram failed: {e}")
 
-# === DYNAMIC AFFORDABLE STOCK POOL (Under ₹1500, High Liquidity) ===
-# Ye wo shares hain jo saste hain aur inme roz movement hoti hai
+# === 2. AFFORDABLE & STRONG STOCK POOL (Under ₹1500 + High Liquidity) ===
 AFFORDABLE_POOL = [
     "ZOMATO", "IRFC", "SUZLON", "NHPC", "TATAPOWER", "YESBANK", "PNB", "BANKBARODA", 
     "CANBK", "UCOBANK", "ITC", "TATAMOTORS", "UPL", "RENUKA", "KRBL", "DALMIASUG", 
@@ -33,14 +35,14 @@ AFFORDABLE_POOL = [
 
 def get_stock_data(symbol):
     try:
-        time.sleep(0.3)
+        time.sleep(random.uniform(0.3, 0.8))
         df = yf.download(f"{symbol}.NS", period="6mo", progress=False)
         if df.empty or len(df) < 50: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
         cp = round(float(df['Close'].iloc[-1]), 2)
         
-        # FILTER 1: No Expensive Stocks (Max ₹1500 for ₹50k capital)
+        # FILTER 1: Budget Friendly (Max ₹1500)
         if cp > 1500: return None
         
         sma20 = round(float(df['Close'].rolling(20).mean().iloc[-1]), 2)
@@ -58,21 +60,20 @@ def get_stock_data(symbol):
         curr = df.iloc[-1]
         body = abs(float(curr['Close']) - float(curr['Open']))
         rng = float(curr['High']) - float(curr['Low'])
-        pat = "Normal"
+        pat = "Normal Price Action"
         if rng > 0 and (body / rng) < 0.15: pat = "Market Confused (Doji)"
-        elif (min(float(curr['Open']), float(curr['Close'])) - float(curr['Low'])) > (2 * body): pat = "Gira tha, ab uthne wala hai (Hammer)"
+        elif (min(float(curr['Open']), float(curr['Close'])) - float(curr['Low'])) > (2 * body): pat = "Gira tha, ab uthne wala (Hammer)"
         
+        # FILTER 2: Smart Money Check (Volume + Delivery Proxy)
         avg_vol = df['Volume'].tail(10).mean()
         today_vol = df['Volume'].iloc[-1]
-        
-        # FILTER 2: Smart Money Check
         stealth = "Bade log chupchap khareed rahe hain" if today_vol > (avg_vol * 1.5) else "Normal activity"
         
-        # FILTER 3: Only show if it's a BUY signal OR a strong reversal pattern
-        if sig != "BUY" and pat == "Normal":
+        # FILTER 3: Only show strong setups
+        if sig != "BUY" and pat == "Normal Price Action":
             return None
             
-        # Calculate Position Sizing for ₹2000 Profit
+        # Position Sizing for ₹2000 Profit
         profit_per_share = tgt - cp
         risk_per_share = cp - sl
         shares_for_target = int(2000 / profit_per_share) if profit_per_share > 0 else 0
@@ -86,15 +87,10 @@ def get_stock_data(symbol):
         return None
 
 try:
-    print("🔄 Scanning the Market Ocean for Affordable Gems...")
+    print("🔄 Scanning Market Ocean for Affordable Gems...")
     
-    # Scan all affordable stocks
     market_data = [d for s in AFFORDABLE_POOL if (d := get_stock_data(s))]
-    
-    # Sort by Price (cheapest first) to prioritize budget-friendly options
     market_data.sort(key=lambda x: x['Price'])
-    
-    # Only take top 5 best opportunities to avoid spam
     top_picks = market_data[:5]
     
     msg = "<b>🌊 SAMUNDAR SE NIKLE HAIN YE HEERE (Affordable & Strong)</b>\n\n"
@@ -111,6 +107,21 @@ try:
             msg += f"💰 <b>₹2000 Profit ke liye:</b> <b>{r['Shares']}</b> shares lo.\n"
             msg += f"⚠️ <b>Max Nuksan (agar SL hit hua):</b> ₹{r['MaxLoss']}\n"
             msg += f"🔗 <a href='https://www.screener.in/company/{r['Name']}/'>Screener Link</a>\n\n"
+
+    # === ADDING BACK MACRO & NEWS FOR FULL CONTEXT ===
+    macro_assets = {"GOLD": "GC=F", "SILVER": "SI=F", "CRUDE_OIL": "CL=F", "USD_INR": "USDINR=X"}
+    macro_msg = ""
+    for name, ticker in macro_assets.items():
+        try:
+            hist = yf.download(ticker, period="1mo", progress=False)["Close"]
+            cl = hist.iloc[:, 0] if isinstance(hist, pd.DataFrame) else hist
+            mom = ((float(cl.iloc[-1]) / float(cl.iloc[-5])) - 1) * 100
+            trend = "📈 UP" if mom > 0 else "📉 DOWN"
+            macro_msg += f"• {name}: {round(mom, 1)}% {trend}\n"
+        except: pass
+    
+    if macro_msg:
+        msg += "<b>🌍 GLOBAL CUES:</b>\n" + macro_msg + "\n"
 
     msg += "<b>💡 DOST KI SALAH:</b>\n"
     msg += "1. Kabhi bhi apne ₹50,000 mein se ek trade mein ₹10,000 se zyada mat lagana.\n"
