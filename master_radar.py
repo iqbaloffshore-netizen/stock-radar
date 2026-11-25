@@ -8,13 +8,12 @@ logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 TG_TOKEN = "9090083594:AAEx5b0stvrE_74K8eQvIi2nOcBdZnStri8"
 TG_CHAT = "5231255872"
 
-# === 1. TELEGRAM CHUNKING FIX ===
+# === 1. TELEGRAM CHUNKING FIX (Unchanged) ===
 def send_telegram(msg):
     try:
         chunks = [msg[i:i+3800] for i in range(0, len(msg), 3800)]
         for i, chunk in enumerate(chunks):
             text = chunk if len(chunks) == 1 else f"<b>Part {i+1}/{len(chunks)}</b>\n\n{chunk}"
-            # No HTML parse mode to prevent silent drops on special chars
             r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
                               data={"chat_id": TG_CHAT, "text": text}, timeout=15)
             print(f"Chunk {i+1} Status: {r.status_code}")
@@ -23,7 +22,7 @@ def send_telegram(msg):
     except Exception as e:
         print(f"❌ Telegram failed: {e}")
 
-# === 2. AFFORDABLE & STRONG STOCK POOL (Under ₹1500 + High Liquidity) ===
+# === 2. AFFORDABLE & STRONG STOCK POOL (Unchanged) ===
 AFFORDABLE_POOL = [
     "ZOMATO", "IRFC", "SUZLON", "NHPC", "TATAPOWER", "YESBANK", "PNB", "BANKBARODA", 
     "CANBK", "UCOBANK", "ITC", "TATAMOTORS", "UPL", "RENUKA", "KRBL", "DALMIASUG", 
@@ -41,9 +40,7 @@ def get_stock_data(symbol):
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
         cp = round(float(df['Close'].iloc[-1]), 2)
-        
-        # FILTER 1: Budget Friendly (Max ₹1500)
-        if cp > 1500: return None
+        if cp > 1500: return None # Budget Friendly Filter
         
         sma20 = round(float(df['Close'].rolling(20).mean().iloc[-1]), 2)
         sma50 = round(float(df['Close'].rolling(50).mean().iloc[-1]), 2)
@@ -64,16 +61,12 @@ def get_stock_data(symbol):
         if rng > 0 and (body / rng) < 0.15: pat = "Market Confused (Doji)"
         elif (min(float(curr['Open']), float(curr['Close'])) - float(curr['Low'])) > (2 * body): pat = "Gira tha, ab uthne wala (Hammer)"
         
-        # FILTER 2: Smart Money Check (Volume + Delivery Proxy)
         avg_vol = df['Volume'].tail(10).mean()
         today_vol = df['Volume'].iloc[-1]
         stealth = "Bade log chupchap khareed rahe hain" if today_vol > (avg_vol * 1.5) else "Normal activity"
         
-        # FILTER 3: Only show strong setups
-        if sig != "BUY" and pat == "Normal Price Action":
-            return None
+        if sig != "BUY" and pat == "Normal Price Action": return None
             
-        # Position Sizing for ₹2000 Profit
         profit_per_share = tgt - cp
         risk_per_share = cp - sl
         shares_for_target = int(2000 / profit_per_share) if profit_per_share > 0 else 0
@@ -86,31 +79,94 @@ def get_stock_data(symbol):
     except:
         return None
 
+# === 3. NEW ADDITION: NEWS, SCHEMES & CONTRACTS FEEDS ===
+feeds = [
+    "https://pib.gov.in/rssfeed.aspx", 
+    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+    "https://news.google.com/rss/search?q=India+Budget+OR+PLI+Scheme+OR+Capex+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=Defence+Tender+OR+Contract+OR+Expansion+when:1d&hl=en-IN&gl=IN&ceid=IN:en"
+]
+GOVT_SCHEME_MAP = {"PLI": ["DIXON", "KAYNES", "M&M"], "Make in India": ["HAL", "BEL", "RVNL"], "Solar": ["TATAPOWER", "ADANIGREEN"]}
+CONTRACT_KEYWORDS = ["won contract", "received order", "expansion plan", "capex", "bagged order"]
+
+def fetch_feed(url):
+    try: return feedparser.parse(url).entries[:3]
+    except: return []
+
+news_alerts, scheme_alerts, contract_alerts, all_news_titles = [], [], [], []
+with ThreadPoolExecutor(max_workers=8) as ex:
+    results = list(ex.map(fetch_feed, feeds))
+
+for entries in results:
+    for entry in entries:
+        title = entry.title
+        all_news_titles.append(title)
+        t_lower = title.lower()
+        for scheme, stocks in GOVT_SCHEME_MAP.items():
+            if scheme.lower() in t_lower:
+                scheme_alerts.append(f"🇮🇳 *{scheme}* → {title[:60]}")
+                break
+        if any(kw in t_lower for kw in CONTRACT_KEYWORDS):
+            contract_alerts.append(f"🏗️ *Contract/Expansion* → {title[:60]}")
+
 try:
-    print("🔄 Scanning Market Ocean for Affordable Gems...")
+    print("🔄 Scanning Market Ocean for Affordable Gems with Reasons...")
     
-    market_data = [d for s in AFFORDABLE_POOL if (d := get_stock_data(s))]
+    market_data = []
+    for s in AFFORDABLE_POOL:
+        d = get_stock_data(s)
+        if d:
+            # NEW ADDITION: Build the "Reason" dynamically
+            reasons = []
+            if d['Stealth'] == "Bade log chupchap khareed rahe hain": reasons.append("Smart Money (High Volume)")
+            if "Hammer" in d['Pattern']: reasons.append("Strong Reversal Pattern")
+            
+            # Check if this stock is mentioned in recent news
+            for news_title in all_news_titles:
+                if s.lower() in news_title.lower():
+                    reasons.append(f"News: {news_title[:50]}...")
+                    break
+            
+            d['Reason'] = " | ".join(reasons) if reasons else "Technical Breakout"
+            market_data.append(d)
+
     market_data.sort(key=lambda x: x['Price'])
     top_picks = market_data[:5]
     
     msg = "<b>🌊 SAMUNDAR SE NIKLE HAIN YE HEERE (Affordable & Strong)</b>\n\n"
-    msg += "<i>Note: Sirf wo shares dikhaye gaye hain jo ₹1500 se kam ke hain aur jinke upar jaane ke strong chances hain.</i>\n\n"
+    msg += "<i>Note: Sirf wo shares dikhaye gaye hain jo ₹1500 se kam ke hain, jinke upar jaane ke strong chances hain, aur jinka 'Reason' clear hai.</i>\n\n"
     
     if not top_picks:
-        msg += "<b>⚠️ Aaj koi strong sasta mauka nahi mila.</b>\n"
-        msg += "Market thoda weak hai. Cash bacha kar rakho, zabardasti trade mat lo.\n\n"
+        msg += "<b>⚠️ Aaj koi strong sasta mauka nahi mila.</b>\nMarket thoda weak hai. Cash bacha kar rakho.\n\n"
     else:
         for r in top_picks:
             msg += f"🔥 <b>{r['Name']}</b> (Current Price: ₹{r['Price']})\n"
-            msg += f"💡 <b>Kyun?</b> {r['Pattern']} aur {r['Stealth']}.\n"
+            msg += f"💡 <b>Kyun (Reason)?</b> {r['Reason']}\n"
             msg += f"🎯 <b>Target:</b> ₹{r['Target']} | 🛑 <b>Stop Loss:</b> ₹{r['SL']}\n"
             msg += f"💰 <b>₹2000 Profit ke liye:</b> <b>{r['Shares']}</b> shares lo.\n"
             msg += f"⚠️ <b>Max Nuksan (agar SL hit hua):</b> ₹{r['MaxLoss']}\n"
             msg += f"🔗 <a href='https://www.screener.in/company/{r['Name']}/'>Screener Link</a>\n\n"
 
-    # === ADDING BACK MACRO & NEWS FOR FULL CONTEXT ===
-    macro_assets = {"GOLD": "GC=F", "SILVER": "SI=F", "CRUDE_OIL": "CL=F", "USD_INR": "USDINR=X"}
+    # === 4. NEW ADDITION: EXPANDED MACRO & COMMODITY OCEAN ===
+    macro_assets = {
+        "GOLD": "GC=F", "SILVER": "SI=F", "CRUDE_OIL": "CL=F", "USD_INR": "USDINR=X",
+        "STEEL": "STEEL=F", "WHEAT": "ZW=F", "SUGAR": "SB=F", "CORN": "ZC=F", "VEG_OIL": "ZL=F"
+    }
+    
+    COMMODITY_MAP = {
+        "SILVER_UP": ["HINDALCO", "VEDL", "TATASTEEL"],
+        "SILVER_DOWN": ["TITAN", "KALYANKJIL", "SENCO"],
+        "STEEL_UP": ["TATASTEEL", "JSWSTEEL", "SAIL", "NMDC"],
+        "STEEL_DOWN": ["TATAMOTORS", "M&M", "LT"],
+        "CRUDE_OIL_UP": ["ONGC", "OIL", "GAIL"],
+        "CRUDE_OIL_DOWN": ["ASIANPAINT", "MRF", "APOLLOTYRE", "INDIGO"],
+        "VEG_OIL_UP": ["PATANJALI", "ADANIWILMAR", "GODREJAGRO"],
+        "SUGAR_CORN_UP": ["BALRAMCHIN", "DALMIASUG", "RENUKA", "UPL"],
+        "RICE_WHEAT_UP": ["KRBL", "LTFOODS", "ITC", "DABUR"]
+    }
+
     macro_msg = ""
+    impact_lines = []
     for name, ticker in macro_assets.items():
         try:
             hist = yf.download(ticker, period="1mo", progress=False)["Close"]
@@ -118,10 +174,32 @@ try:
             mom = ((float(cl.iloc[-1]) / float(cl.iloc[-5])) - 1) * 100
             trend = "📈 UP" if mom > 0 else "📉 DOWN"
             macro_msg += f"• {name}: {round(mom, 1)}% {trend}\n"
+            
+            key = None
+            if name == "CRUDE_OIL": key = "CRUDE_OIL_UP" if mom > 3 else ("CRUDE_OIL_DOWN" if mom < -3 else None)
+            elif name == "VEG_OIL": key = "VEG_OIL_UP" if mom > 1.5 else ("VEG_OIL_DOWN" if mom < -1.5 else None)
+            elif name in ["SUGAR", "CORN"]: key = "SUGAR_CORN_UP" if mom > 1.5 else None
+            elif name in ["WHEAT", "RICE"]: key = "RICE_WHEAT_UP" if mom > 1.5 else None
+            elif name == "GOLD": key = "GOLD_UP" if mom > 2 else None
+            elif name == "SILVER": key = "SILVER_UP" if mom > 2 else ("SILVER_DOWN" if mom < -2 else None)
+            elif name == "STEEL": key = "STEEL_UP" if mom > 2 else ("STEEL_DOWN" if mom < -2 else None)
+            
+            if key and key in COMMODITY_MAP:
+                label = key.replace("_UP", " BADH RAHA HAI").replace("_DOWN", " GIR RAHA HAI").replace("_", " ")
+                impact_lines.append(f"🌊 *{label} ({round(mom,1)}%)* → {', '.join(COMMODITY_MAP[key])}")
         except: pass
-    
+
+    # === 5. FORMAT FINAL MESSAGE ===
     if macro_msg:
         msg += "<b>🌍 GLOBAL CUES:</b>\n" + macro_msg + "\n"
+    
+    if impact_lines:
+        msg += "<b>🌊 COMMODITY OCEAN IMPACT:</b>\n" + "\n".join(impact_lines) + "\n\n"
+        
+    if scheme_alerts or contract_alerts:
+        msg += "<b>📢 LIVE NEWS & SCHEMES:</b>\n"
+        if scheme_alerts: msg += "\n".join(scheme_alerts[:3]) + "\n"
+        if contract_alerts: msg += "\n".join(contract_alerts[:3]) + "\n\n"
 
     msg += "<b>💡 DOST KI SALAH:</b>\n"
     msg += "1. Kabhi bhi apne ₹50,000 mein se ek trade mein ₹10,000 se zyada mat lagana.\n"
@@ -129,7 +207,7 @@ try:
     msg += "3. Ye system suggestion hai, final decision tumhara hai. Safe raho!"
     
     send_telegram(msg)
-    print("✅ Done! Message sent.")
+    print("✅ Done! Message sent with full context.")
 
 except Exception as e:
     error_msg = f"🚨 <b>SYSTEM CRASHED!</b>\nError: <code>{str(e)}</code>"
